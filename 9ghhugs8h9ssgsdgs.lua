@@ -858,3 +858,127 @@ local function addEntry(animId, enemyName, dist, characterRef)
     EntryCountLabel.Text = entryCount .. " entries"
     ScrollList.CanvasSize = UDim2.new(0, 0, 0, ListLayout.AbsoluteContentSize.Y)
     
+    -- Cleanup old entries
+    local children = {}
+    for _, child in ipairs(ScrollList:GetChildren()) do
+        if child:IsA("Frame") then
+            table.insert(children, child)
+        end
+    end
+    
+    if #children > maxEntries then
+        table.sort(children, function(a, b) return a.LayoutOrder > b.LayoutOrder end)
+        for i = maxEntries + 1, #children do
+            children[i]:Destroy()
+        end
+    end
+end
+
+local trackedAnimators = {}
+
+local function setupAnimator(animator, character)
+    if trackedAnimators[animator] then return end
+    trackedAnimators[animator] = true
+    
+    local conn = animator.AnimationPlayed:Connect(function(animationTrack)
+        -- Ignore local player
+        if character == LocalPlayer.Character then return end
+        
+        -- Pause Filter
+        if _G.LoggingPaused then return end
+        
+        -- Player / Mob Filter
+        local isPlayer = Players:GetPlayerFromCharacter(character) ~= nil
+        if isPlayer and not _G.LogPlayers then return end
+        if not isPlayer and not _G.LogMobs then return end
+        
+        -- Movement / Looped Animation Filters
+        if animationTrack.Looped == true then return end
+        
+        local animName = string.lower(animationTrack.Name or "")
+        local animObjName = animationTrack.Animation and string.lower(animationTrack.Animation.Name or "") or ""
+        if string.find(animName, "walk") or string.find(animName, "run") or string.find(animName, "idle") or 
+           string.find(animName, "locomotion") or string.find(animName, "dash") or string.find(animName, "sprint") or 
+           string.find(animName, "jump") or string.find(animName, "fall") or string.find(animName, "movement") then
+            return
+        end
+        if string.find(animObjName, "walk") or string.find(animObjName, "run") or string.find(animObjName, "idle") or 
+           string.find(animObjName, "locomotion") or string.find(animObjName, "dash") or string.find(animObjName, "sprint") or 
+           string.find(animObjName, "jump") or string.find(animObjName, "fall") or string.find(animObjName, "movement") then
+            return
+        end
+        
+        local animId = animationTrack.Animation and animationTrack.Animation.AnimationId
+        if not animId or animId == "" then return end
+        
+        local dist = 0
+        local lpChar = LocalPlayer.Character
+        if lpChar and lpChar.PrimaryPart and character.PrimaryPart then
+            dist = (lpChar.PrimaryPart.Position - character.PrimaryPart.Position).Magnitude
+        end
+        
+        local maxRadius = tonumber(RadiusBox.Text)
+        if maxRadius and dist > maxRadius then
+            return
+        end
+        
+        addEntry(animId, character.Name, dist, character)
+    end)
+    
+    table.insert(connections, conn)
+end
+
+local function scanCharacter(character)
+    if not character or not character:IsA("Model") then return end
+    
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if humanoid then
+        local animator = humanoid:FindFirstChildOfClass("Animator")
+        if animator then
+            setupAnimator(animator, character)
+        else
+            local conn; conn = humanoid.ChildAdded:Connect(function(child)
+                if child:IsA("Animator") then
+                    setupAnimator(child, character)
+                    conn:Disconnect()
+                end
+            end)
+            table.insert(connections, conn)
+        end
+    end
+end
+
+-- Start Tracking
+local function startTracking()
+    -- Scan existing workspace
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if obj:IsA("Humanoid") then
+            scanCharacter(obj.Parent)
+        end
+    end
+    
+    -- Listen for new objects
+    local wsConn = Workspace.DescendantAdded:Connect(function(descendant)
+        if descendant:IsA("Humanoid") then
+            task.delay(0.5, function()
+                scanCharacter(descendant.Parent)
+            end)
+        elseif descendant:IsA("Animator") and descendant.Parent and descendant.Parent:IsA("Humanoid") then
+            setupAnimator(descendant, descendant.Parent.Parent)
+        end
+    end)
+    
+    table.insert(connections, wsConn)
+end
+
+startTracking()
+
+_G.ToggleInfoLogger = function(state)
+    if ScreenGui then
+        if state == nil then
+            ScreenGui.Enabled = not ScreenGui.Enabled
+        else
+            ScreenGui.Enabled = state
+        end
+    end
+end
